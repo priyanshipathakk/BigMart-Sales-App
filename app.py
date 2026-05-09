@@ -4,10 +4,10 @@ import numpy as np
 import xgboost as xgb
 import pickle
 
-# --- 1. Initialize Website Memory ---
-# This creates a blank dataset that remembers data as long as the website is open
-if 'my_dataset' not in st.session_state:
-    st.session_state['my_dataset'] = pd.DataFrame()
+# --- 1. Initialize Master Website Memory ---
+# This single variable will hold your uploaded data AND your new single items
+if 'master_dataset' not in st.session_state:
+    st.session_state['master_dataset'] = pd.DataFrame()
 
 # --- 2. Load the Models ---
 @st.cache_resource
@@ -22,14 +22,83 @@ xgb_model, rf_model = load_models()
 
 # --- 3. Page Title ---
 st.title("🛒 BigMart Sales Prediction App")
-st.write("Predict sales for a single item, build a custom dataset, or upload bulk data.")
+st.write("Upload your base dataset first, then add single items to it, or run bulk predictions.")
 st.divider()
 
 # --- 4. Create Navigation Tabs ---
-tab1, tab2 = st.tabs(["📌 Single Item & Build Dataset", "📁 Bulk Data Upload"])
+tab1, tab2 = st.tabs(["📌 Single Item Entry", "📁 Base Data Upload & Bulk Predict"])
 
 # ==========================================
-# TAB 1: SINGLE ITEM & BUILD DATASET
+# TAB 2: BULK UPLOAD (Do this first so Tab 1 has a base to add to)
+# ==========================================
+with tab2:
+    st.header("1. Upload Base Dataset")
+    st.write("Upload your `test.csv` file here. This will serve as the base dataset that new single items are added to.")
+    
+    uploaded_file = st.file_uploader("Choose a CSV file", type=["csv"])
+    
+    # Load the uploaded file into our Master Dataset
+    if uploaded_file is not None:
+        if st.button("Load File into Memory", type="primary"):
+            st.session_state['master_dataset'] = pd.read_csv(uploaded_file)
+            st.success("✅ Base dataset successfully loaded into memory!")
+            
+    # Bulk Prediction Logic
+    st.divider()
+    st.subheader("2. Run Bulk Prediction")
+    bulk_model_choice = st.radio("Choose Algorithm for Bulk Prediction:", ["XGBoost", "Random Forest"])
+    
+    if st.button("Generate Bulk Predictions for Master Dataset", key="bulk_btn"):
+        if st.session_state['master_dataset'].empty:
+            st.warning("Please upload and load a dataset first!")
+        else:
+            with st.spinner("Processing data and running AI models..."):
+                process_data = st.session_state['master_dataset'].copy()
+                
+                # Basic cleaning for prediction
+                if 'Item_Weight' in process_data.columns:
+                    process_data['Item_Weight'] = process_data['Item_Weight'].fillna(process_data['Item_Weight'].mean())
+                if 'Outlet_Size' in process_data.columns:
+                    process_data['Outlet_Size'] = process_data['Outlet_Size'].fillna('Medium') 
+                if 'Item_Fat_Content' in process_data.columns:
+                    process_data['Item_Fat_Content'] = process_data['Item_Fat_Content'].replace({'low fat': 'Low Fat', 'LF': 'Low Fat', 'reg': 'Regular'})
+                
+                mapping_dict = {
+                    'Item_Fat_Content': {'Low Fat': 0, 'Regular': 1},
+                    'Outlet_Size': {'High': 0, 'Medium': 1, 'Small': 2},
+                    'Outlet_Location_Type': {'Tier 1': 0, 'Tier 2': 1, 'Tier 3': 2},
+                    'Outlet_Type': {'Grocery Store': 0, 'Supermarket Type1': 1, 'Supermarket Type2': 2, 'Supermarket Type3': 3}
+                }
+                for col, mapping in mapping_dict.items():
+                    if col in process_data.columns:
+                        process_data[col] = process_data[col].map(mapping)
+                    
+                item_type_list = ["Baking Goods", "Breads", "Breakfast", "Canned", "Dairy", "Frozen Foods", "Fruits and Vegetables", "Hard Drinks", "Health and Hygiene", "Household", "Meat", "Others", "Seafood", "Snack Foods", "Soft Drinks", "Starchy Foods"]
+                if 'Item_Type' in process_data.columns:
+                    process_data['Item_Type'] = process_data['Item_Type'].apply(lambda x: item_type_list.index(x) if x in item_type_list else 0)
+                
+                # Assume 0 if identifiers are missing for prediction purposes
+                process_data['Item_Identifier'] = 0
+                process_data['Outlet_Identifier'] = 0
+                
+                features = ['Item_Identifier', 'Item_Weight', 'Item_Fat_Content', 'Item_Visibility', 'Item_Type', 'Item_MRP', 'Outlet_Identifier', 'Outlet_Establishment_Year', 'Outlet_Size', 'Outlet_Location_Type', 'Outlet_Type']
+                
+                # Filter only the features needed for the model
+                try:
+                    model_input = process_data[features]
+                    if bulk_model_choice == "XGBoost":
+                        predictions = xgb_model.predict(model_input)
+                    else:
+                        predictions = rf_model.predict(model_input)
+                    
+                    # Update the MASTER dataset with predictions
+                    st.session_state['master_dataset']['Predicted_Outlet_Sales'] = predictions
+                    st.success("✅ Bulk Prediction Complete! Check the dataset below.")
+                except Exception as e:
+                    st.error(f"Error during prediction. Ensure your uploaded CSV has the correct columns. Error: {e}")
+
+# ==========================================
+# TAB 1: SINGLE ITEM & ADD TO MASTER
 # ==========================================
 with tab1:
     col1, col2, col3 = st.columns(3)
@@ -58,14 +127,13 @@ with tab1:
 
     with col3:
         st.subheader("Model Selection")
-        model_choice = st.radio("Choose Algorithm:", ["XGBoost", "Random Forest"])
+        model_choice = st.radio("Choose Algorithm:", ["XGBoost", "Random Forest"], key="single_model")
 
     st.divider()
 
-    # The New "Predict and Save" Button
-    if st.button("Predict Sales & Add to Dataset", type="primary"):
+    if st.button("Predict Sales & Add to Master Dataset", type="primary"):
         
-        # 1. Create the data for the AI Model (Needs to be converted to numbers)
+        # 1. Create data for the AI Model
         model_data = pd.DataFrame({
             'Item_Identifier': [0], 'Item_Weight': [item_weight],
             'Item_Fat_Content': [item_fat_content], 'Item_Visibility': [item_visibility],
@@ -75,7 +143,6 @@ with tab1:
             'Outlet_Type': [outlet_type]
         })
         
-        # Mapping to numbers for the AI
         mapping_dict = {
             'Item_Fat_Content': {'Low Fat': 0, 'Regular': 1},
             'Outlet_Size': {'High': 0, 'Medium': 1, 'Small': 2},
@@ -88,7 +155,7 @@ with tab1:
         item_type_list = ["Baking Goods", "Breads", "Breakfast", "Canned", "Dairy", "Frozen Foods", "Fruits and Vegetables", "Hard Drinks", "Health and Hygiene", "Household", "Meat", "Others", "Seafood", "Snack Foods", "Soft Drinks", "Starchy Foods"]
         model_data['Item_Type'] = model_data['Item_Type'].apply(lambda x: item_type_list.index(x))
 
-        # 2. Run the Prediction
+        # 2. Run Prediction
         if model_choice == "XGBoost":
             prediction = xgb_model.predict(model_data)[0]
         else:
@@ -97,97 +164,45 @@ with tab1:
         st.success(f"Calculation Complete using {model_choice}!")
         st.metric(label="Predicted Item Outlet Sales", value=f"${prediction:.2f}")
         
-        # 3. Save the human-readable data to the Website's Memory
-        new_record = pd.DataFrame({
-            'Item_Identifier': [item_identifier],
-            'Item_Weight': [item_weight],
-            'Item_Fat_Content': [item_fat_content],
-            'Item_Visibility': [item_visibility],
-            'Item_Type': [item_type],
-            'Item_MRP': [item_mrp],
-            'Outlet_Identifier': [outlet_identifier],
-            'Outlet_Establishment_Year': [outlet_year],
-            'Outlet_Size': [outlet_size],
-            'Outlet_Location_Type': [outlet_location],
-            'Outlet_Type': [outlet_type],
-            'Predicted_Sales': [round(prediction, 2)] # Add the prediction!
-        })
+        # 3. Save the new record as a DataFrame row
+        new_record = pd.DataFrame([{
+            'Item_Identifier': item_identifier,
+            'Item_Weight': item_weight,
+            'Item_Fat_Content': item_fat_content,
+            'Item_Visibility': item_visibility,
+            'Item_Type': item_type,
+            'Item_MRP': item_mrp,
+            'Outlet_Identifier': outlet_identifier,
+            'Outlet_Establishment_Year': outlet_year,
+            'Outlet_Size': outlet_size,
+            'Outlet_Location_Type': outlet_location,
+            'Outlet_Type': outlet_type,
+            'Predicted_Outlet_Sales': round(prediction, 2)
+        }])
         
-        # Append the new record to our running dataset in session_state
-        st.session_state['my_dataset'] = pd.concat([st.session_state['my_dataset'], new_record], ignore_index=True)
+        # 4. Append directly to the MASTER dataset
+        if st.session_state['master_dataset'].empty:
+            st.session_state['master_dataset'] = new_record
+        else:
+            st.session_state['master_dataset'] = pd.concat([st.session_state['master_dataset'], new_record], ignore_index=True)
 
-    # Display the built dataset if it has data in it
-    if not st.session_state['my_dataset'].empty:
-        st.divider()
-        st.subheader("📝 Your Custom Dataset")
-        st.write("Every time you predict a single item, it is saved here. You can download this custom list anytime.")
-        st.dataframe(st.session_state['my_dataset'])
-        
-        # Download button for the custom dataset
-        custom_csv = st.session_state['my_dataset'].to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="⬇️ Download Your Custom Dataset",
-            data=custom_csv,
-            file_name='My_Custom_BigMart_Data.csv',
-            mime='text/csv',
-        )
 
 # ==========================================
-# TAB 2: BULK UPLOAD (From previous step)
+# ALWAYS DISPLAY THE MASTER DATASET AT THE BOTTOM
 # ==========================================
-with tab2:
-    st.header("Upload Dataset for Bulk Prediction")
-    st.write("Upload your `test.csv` file here. The AI will process all rows and generate predictions.")
+if not st.session_state['master_dataset'].empty:
+    st.divider()
+    st.subheader("📊 Your Active Master Dataset")
+    st.write("This contains your uploaded data AND any single items you have added. It updates in real-time.")
     
-    uploaded_file = st.file_uploader("Choose a CSV file", type=["csv"])
+    # Show the dataframe
+    st.dataframe(st.session_state['master_dataset'])
     
-    if uploaded_file is not None:
-        test_data = pd.read_csv(uploaded_file)
-        st.write("Preview of your uploaded data:")
-        st.dataframe(test_data.head())
-        
-        bulk_model_choice = st.radio("Choose Algorithm for Bulk Prediction:", ["XGBoost", "Random Forest"])
-        
-        if st.button("Generate Bulk Predictions", type="primary", key="bulk_btn"):
-            with st.spinner("Cleaning data and running AI models..."):
-                process_data = test_data.copy()
-                
-                process_data['Item_Weight'] = process_data['Item_Weight'].fillna(process_data['Item_Weight'].mean())
-                process_data['Outlet_Size'] = process_data['Outlet_Size'].fillna('Medium') 
-                process_data['Item_Fat_Content'] = process_data['Item_Fat_Content'].replace({'low fat': 'Low Fat', 'LF': 'Low Fat', 'reg': 'Regular'})
-                
-                mapping_dict = {
-                    'Item_Fat_Content': {'Low Fat': 0, 'Regular': 1},
-                    'Outlet_Size': {'High': 0, 'Medium': 1, 'Small': 2},
-                    'Outlet_Location_Type': {'Tier 1': 0, 'Tier 2': 1, 'Tier 3': 2},
-                    'Outlet_Type': {'Grocery Store': 0, 'Supermarket Type1': 1, 'Supermarket Type2': 2, 'Supermarket Type3': 3}
-                }
-                for col, mapping in mapping_dict.items():
-                    process_data[col] = process_data[col].map(mapping)
-                    
-                item_type_list = ["Baking Goods", "Breads", "Breakfast", "Canned", "Dairy", "Frozen Foods", "Fruits and Vegetables", "Hard Drinks", "Health and Hygiene", "Household", "Meat", "Others", "Seafood", "Snack Foods", "Soft Drinks", "Starchy Foods"]
-                process_data['Item_Type'] = process_data['Item_Type'].apply(lambda x: item_type_list.index(x) if x in item_type_list else 0)
-                
-                process_data['Item_Identifier'] = 0
-                process_data['Outlet_Identifier'] = 0
-                
-                features = ['Item_Identifier', 'Item_Weight', 'Item_Fat_Content', 'Item_Visibility', 'Item_Type', 'Item_MRP', 'Outlet_Identifier', 'Outlet_Establishment_Year', 'Outlet_Size', 'Outlet_Location_Type', 'Outlet_Type']
-                process_data = process_data[features]
-                
-                if bulk_model_choice == "XGBoost":
-                    predictions = xgb_model.predict(process_data)
-                else:
-                    predictions = rf_model.predict(process_data)
-                
-                test_data['Predicted_Outlet_Sales'] = predictions
-                
-                st.success("✅ Bulk Prediction Complete!")
-                st.dataframe(test_data)
-                
-                csv = test_data.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="⬇️ Download Predictions as CSV",
-                    data=csv,
-                    file_name='BigMart_Bulk_Predictions.csv',
-                    mime='text/csv',
-                )
+    # Provide a unified download button
+    csv_data = st.session_state['master_dataset'].to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="⬇️ Download Full Updated Dataset",
+        data=csv_data,
+        file_name='Updated_BigMart_Dataset.csv',
+        mime='text/csv',
+    )
