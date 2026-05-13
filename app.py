@@ -40,8 +40,29 @@ with tab2:
     # Load the uploaded file into our Master Dataset
     if uploaded_file is not None:
         if st.button("Load File into Memory", type="primary"):
-            st.session_state['master_dataset'] = pd.read_csv(uploaded_file)
-            st.success("✅ Base dataset successfully loaded into memory!")
+            
+            # 1. Read the CSV file
+            df = pd.read_csv(uploaded_file)
+            
+            # 2. CLEANING: Handle Null/None values immediately so they don't show in the app
+            if 'Item_Weight' in df.columns:
+                # Fill missing weights with the mean
+                df['Item_Weight'] = df['Item_Weight'].fillna(df['Item_Weight'].mean())
+                
+            if 'Outlet_Size' in df.columns:
+                # Fill missing outlet sizes with 'Medium' (the most common mode)
+                df['Outlet_Size'] = df['Outlet_Size'].fillna('Medium') 
+                
+            if 'Item_Fat_Content' in df.columns:
+                # Standardize naming
+                df['Item_Fat_Content'] = df['Item_Fat_Content'].replace({'low fat': 'Low Fat', 'LF': 'Low Fat', 'reg': 'Regular'})
+            
+            # Catch-all: If any other random columns have nulls, fill them with 0 or a blank string
+            # df = df.fillna(0) # (Uncomment this line if you want to aggressively fill ALL remaining nulls with 0)
+
+            # 3. Save the CLEANED dataframe to session state
+            st.session_state['master_dataset'] = df
+            st.success("✅ Base dataset successfully loaded and cleaned in memory!")
             
     # Bulk Prediction Logic
     st.divider()
@@ -53,16 +74,11 @@ with tab2:
             st.warning("Please upload and load a dataset first!")
         else:
             with st.spinner("Processing data and running AI models..."):
+                
+                # Because we already cleaned the main dataset above, we just need to prep it for the model
                 process_data = st.session_state['master_dataset'].copy()
                 
-                # Basic cleaning for prediction
-                if 'Item_Weight' in process_data.columns:
-                    process_data['Item_Weight'] = process_data['Item_Weight'].fillna(process_data['Item_Weight'].mean())
-                if 'Outlet_Size' in process_data.columns:
-                    process_data['Outlet_Size'] = process_data['Outlet_Size'].fillna('Medium') 
-                if 'Item_Fat_Content' in process_data.columns:
-                    process_data['Item_Fat_Content'] = process_data['Item_Fat_Content'].replace({'low fat': 'Low Fat', 'LF': 'Low Fat', 'reg': 'Regular'})
-                
+                # Map categorical variables to numbers for the model
                 mapping_dict = {
                     'Item_Fat_Content': {'Low Fat': 0, 'Regular': 1},
                     'Outlet_Size': {'High': 0, 'Medium': 1, 'Small': 2},
@@ -89,13 +105,15 @@ with tab2:
                     if bulk_model_choice == "XGBoost":
                         predictions = xgb_model.predict(model_input)
                     else:
+                        
                         predictions = rf_model.predict(model_input)
                     
                     # Update the MASTER dataset with predictions
-                    st.session_state['master_dataset']['Predicted_Outlet_Sales'] = predictions
+                    st.session_state['master_dataset']['Predicted_Outlet_Sales'] = np.round(predictions, 2)
                     st.success("✅ Bulk Prediction Complete! Check the dataset below.")
                 except Exception as e:
                     st.error(f"Error during prediction. Ensure your uploaded CSV has the correct columns. Error: {e}")
+
 
 # ==========================================
 # TAB 1: SINGLE ITEM & ADD TO MASTER
