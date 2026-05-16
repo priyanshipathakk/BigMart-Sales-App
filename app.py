@@ -195,6 +195,7 @@ with tab1:
             'Outlet_Size': outlet_size,
             'Outlet_Location_Type': outlet_location,
             'Outlet_Type': outlet_type,
+            'Item_Outlet_Sales': round(prediction, 2),
             'Predicted_Outlet_Sales': round(prediction, 2)
         }])
         
